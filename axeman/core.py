@@ -27,6 +27,9 @@ from . import certlib
 
 DOWNLOAD_CONCURRENCY = 50
 MAX_QUEUE_SIZE = 1000
+import boto3
+
+client = boto3.client('s3')
 
 async def download_worker(session, log_info, work_deque, download_queue):
     while True:
@@ -35,16 +38,19 @@ async def download_worker(session, log_info, work_deque, download_queue):
         except IndexError:
             return
 
-        logging.debug("[{}] Queueing up blocks {}-{}...".format(log_info['url'], start, end))
+        logging.debug(
+            "[{}] Queueing up blocks {}-{}...".format(log_info['url'], start, end))
 
         for x in range(3):
             try:
                 async with session.get(certlib.DOWNLOAD.format(log_info['url'], start, end)) as response:
                     entry_list = await response.json()
-                    logging.debug("[{}] Retrieved blocks {}-{}...".format(log_info['url'], start, end))
+                    logging.debug(
+                        "[{}] Retrieved blocks {}-{}...".format(log_info['url'], start, end))
                     break
             except Exception as e:
-                logging.error("Exception getting block {}-{}! {}".format(start, end, e))
+                logging.error(
+                    "Exception getting block {}-{}! {}".format(start, end, e))
         else:  # Notorious for else, if we didn't encounter a break our request failed 3 times D:
             with open('/tmp/fails.csv', 'a') as f:
                 f.write(",".join([log_info['url'], str(start), str(end)]))
@@ -60,6 +66,7 @@ async def download_worker(session, log_info, work_deque, download_queue):
             "end": end
         })
 
+
 async def queue_monitor(log_info, work_deque, download_results_queue):
     total_size = log_info['tree_size'] - 1
     total_blocks = math.ceil(total_size / log_info['block_size'])
@@ -72,6 +79,7 @@ async def queue_monitor(log_info, work_deque, download_results_queue):
             len(download_results_queue._queue),
         ))
         await asyncio.sleep(2)
+
 
 async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='/tmp/', concurrency_count=DOWNLOAD_CONCURRENCY):
     async with aiohttp.ClientSession(loop=loop, conn_timeout=10) as session:
@@ -86,11 +94,13 @@ async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='
             work_deque = deque()
             download_results_queue = asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
 
-            logging.info("Downloading certificates for {}".format(log['description']))
+            logging.info("Downloading certificates for {}".format(
+                log['description']))
             try:
                 log_info = await certlib.retrieve_log_info(log, session)
             except (aiohttp.ClientConnectorError, aiohttp.ServerTimeoutError, aiohttp.ClientOSError, aiohttp.ClientResponseError) as e:
-                logging.error("Failed to connect to CTL! -> {} - skipping.".format(e))
+                logging.error(
+                    "Failed to connect to CTL! -> {} - skipping.".format(e))
                 continue
 
             try:
@@ -100,18 +110,22 @@ async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='
                 continue
 
             download_tasks = asyncio.gather(*[
-                download_worker(session, log_info, work_deque, download_results_queue)
+                download_worker(session, log_info, work_deque,
+                                download_results_queue)
                 for _ in range(concurrency_count)
             ])
 
-            processing_task    = asyncio.ensure_future(processing_coro(download_results_queue, output_dir=output_directory))
-            queue_monitor_task = asyncio.ensure_future(queue_monitor(log_info, work_deque, download_results_queue))
+            processing_task = asyncio.ensure_future(processing_coro(
+                download_results_queue, output_dir=output_directory))
+            queue_monitor_task = asyncio.ensure_future(
+                queue_monitor(log_info, work_deque, download_results_queue))
 
             asyncio.ensure_future(download_tasks)
 
             await download_tasks
 
-            await download_results_queue.put(None) # Downloads are done, processing can stop
+            # Downloads are done, processing can stop
+            await download_results_queue.put(None)
 
             await processing_task
 
@@ -122,7 +136,9 @@ async def retrieve_certificates(loop, url=None, ctl_offset=0, output_directory='
                 '/tmp/{}.csv'.format(log_info['url'].replace('/', '_'))
             ))
 
-            logging.info("Finished downloading and processing {}".format(log_info['url']))
+            logging.info(
+                "Finished downloading and processing {}".format(log_info['url']))
+
 
 async def processing_coro(download_results_queue, output_dir="/tmp"):
     logging.info("Starting processing coro and process pool")
@@ -141,11 +157,12 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
                 done = True
                 break
 
-        logging.debug("Got a chunk of {}. Mapping into process pool".format(process_pool.pool_workers))
-
+        logging.debug("Got a chunk of {}. Mapping into process pool".format(
+            process_pool.pool_workers))
 
         for entry in entries_iter:
-            csv_storage = '{}/certificates/{}'.format(output_dir, entry['log_info']['url'].replace('/', '_'))
+            csv_storage = '{}/certificates/{}'.format(
+                output_dir, entry['log_info']['url'].replace('/', '_'))
             if not os.path.exists(csv_storage):
                 print("[{}] Making dir...".format(os.getpid()))
                 os.makedirs(csv_storage)
@@ -162,37 +179,47 @@ async def processing_coro(download_results_queue, output_dir="/tmp"):
 
     await process_pool.coro_join()
 
+
 def process_worker(result_info, output_dir="/tmp"):
     logging.debug("Worker {} starting...".format(os.getpid()))
     if not result_info:
         return
     try:
-        csv_storage = '{}/certificates/{}'.format(output_dir, result_info['log_info']['url'].replace('/', '_'))
+        csv_storage = '{}/certificates/{}'.format(
+            output_dir, result_info['log_info']['url'].replace('/', '_'))
 
-        csv_file = "{}/{}-{}.csv".format(csv_storage, result_info['start'], result_info['end'])
-
+        csv_file = "{}/{}-{}.csv".format(csv_storage,
+                                         result_info['start'], result_info['end'])
+        key = f'{result_info['log_info']['url'].replace('/', '_')}-{result_info['start']}-{result_info['end']}'
         lines = []
 
         print("[{}] Parsing...".format(os.getpid()))
         for entry in result_info['entries']:
-            mtl = certlib.MerkleTreeHeader.parse(base64.b64decode(entry['leaf_input']))
+            mtl = certlib.MerkleTreeHeader.parse(
+                base64.b64decode(entry['leaf_input']))
 
             cert_data = {}
 
             if mtl.LogEntryType == "X509LogEntryType":
                 cert_data['type'] = "X509LogEntry"
-                chain = [crypto.load_certificate(crypto.FILETYPE_ASN1, certlib.Certificate.parse(mtl.Entry).CertData)]
-                extra_data = certlib.CertificateChain.parse(base64.b64decode(entry['extra_data']))
+                chain = [crypto.load_certificate(
+                    crypto.FILETYPE_ASN1, certlib.Certificate.parse(mtl.Entry).CertData)]
+                extra_data = certlib.CertificateChain.parse(
+                    base64.b64decode(entry['extra_data']))
                 for cert in extra_data.Chain:
-                    chain.append(crypto.load_certificate(crypto.FILETYPE_ASN1, cert.CertData))
+                    chain.append(crypto.load_certificate(
+                        crypto.FILETYPE_ASN1, cert.CertData))
             else:
                 cert_data['type'] = "PreCertEntry"
-                extra_data = certlib.PreCertEntry.parse(base64.b64decode(entry['extra_data']))
-                chain = [crypto.load_certificate(crypto.FILETYPE_ASN1, extra_data.LeafCert.CertData)]
+                extra_data = certlib.PreCertEntry.parse(
+                    base64.b64decode(entry['extra_data']))
+                chain = [crypto.load_certificate(
+                    crypto.FILETYPE_ASN1, extra_data.LeafCert.CertData)]
 
                 for cert in extra_data.Chain:
                     chain.append(
-                        crypto.load_certificate(crypto.FILETYPE_ASN1, cert.CertData)
+                        crypto.load_certificate(
+                            crypto.FILETYPE_ASN1, cert.CertData)
                     )
 
             cert_data.update({
@@ -200,28 +227,34 @@ def process_worker(result_info, output_dir="/tmp"):
                 "chain": [certlib.dump_cert(x) for x in chain[1:]]
             })
 
+            cert_data['size'] = str(len(cert_data['leaf_cert']['as_der']))
+
             certlib.add_all_domains(cert_data)
 
             cert_data['source'] = {
                 "url": result_info['log_info']['url'],
             }
 
-            chain_hash = hashlib.sha256("".join([x['as_der'] for x in cert_data['chain']]).encode('ascii')).hexdigest()
-
+            chain_hash = hashlib.sha256(
+                "".join([x['as_der'] for x in cert_data['chain']]).encode('ascii')).hexdigest()
+  
             # header = "url, cert_index, chain_hash, cert_der, all_domains, not_before, not_after"
             lines.append(
                 ",".join([
-                    result_info['log_info']['url'],
-                    str(entry['cert_index']),
-                    chain_hash,
+                    result_info['log_info']['url'], # url
+                    str(entry['cert_index']),       # cert index
+                    chain_hash,                     # Chain Hash    
                     cert_data['leaf_cert']['as_der'],
-                    ' '.join(cert_data['leaf_cert']['all_domains']),
+                    cert_data['size'],
+                    ' '.join(cert_data['leaf_cert']['all_domains']), # all Domains
                     str(cert_data['leaf_cert']['not_before']),
                     str(cert_data['leaf_cert']['not_after'])
                 ]) + "\n"
             )
 
         print("[{}] Finished, writing CSV...".format(os.getpid()))
+
+        key = csv_file
 
         with open(csv_file, 'w') as f:
             f.write("".join(lines))
@@ -235,8 +268,9 @@ def process_worker(result_info, output_dir="/tmp"):
 
     return True
 
+
 async def get_certs_and_print():
-    with aiohttp.ClientSession(conn_timeout=5) as session:
+    async with aiohttp.ClientSession(conn_timeout=5) as session:
         ctls = await certlib.retrieve_all_ctls(session)
         print("Found {} CTLs...".format(len(ctls)))
         for log in ctls:
@@ -248,13 +282,16 @@ async def get_certs_and_print():
             print(log['description'])
             print("    \- URL:            {}".format(log['url']))
             print("    \- Owner:          {}".format(log_info['operated_by']))
-            print("    \- Cert Count:     {}".format(locale.format("%d", log_info['tree_size']-1, grouping=True)))
+            print("    \- Cert Count:     {}".format(locale.format("%d",
+                                                                   log_info['tree_size']-1, grouping=True)))
             print("    \- Max Block Size: {}\n".format(log_info['block_size']))
+
 
 def main():
     loop = asyncio.get_event_loop()
 
-    parser = argparse.ArgumentParser(description='Pull down certificate transparency list information')
+    parser = argparse.ArgumentParser(
+        description='Pull down certificate transparency list information')
 
     parser.add_argument('-f', dest='log_file', action='store', default='/tmp/axeman.log',
                         help='location for the axeman log file')
@@ -262,17 +299,23 @@ def main():
     parser.add_argument('-s', dest='start_offset', action='store', default=0,
                         help='Skip N number of lists before starting')
 
-    parser.add_argument('-l', dest="list_mode", action="store_true", help="List all available certificate lists")
+    parser.add_argument('-l', dest="list_mode", action="store_true",
+                        help="List all available certificate lists")
 
-    parser.add_argument('-u', dest="ctl_url", action="store", default=None, help="Retrieve this CTL only")
+    parser.add_argument('-u', dest="ctl_url", action="store",
+                        default=None, help="Retrieve this CTL only")
 
-    parser.add_argument('-z', dest="ctl_offset", action="store", default=0, help="The CTL offset to start at")
+    parser.add_argument('-z', dest="ctl_offset", action="store",
+                        default=0, help="The CTL offset to start at")
 
-    parser.add_argument('-o', dest="output_dir", action="store", default="/tmp", help="The output directory to store certificates in")
+    parser.add_argument('-o', dest="output_dir", action="store",
+                        default="/tmp", help="The output directory to store certificates in")
 
-    parser.add_argument('-v', dest="verbose", action="store_true", help="Print out verbose/debug info")
+    parser.add_argument('-v', dest="verbose", action="store_true",
+                        help="Print out verbose/debug info")
 
-    parser.add_argument('-c', dest='concurrency_count', action='store', default=50, type=int, help="The number of concurrent downloads to run at a time")
+    parser.add_argument('-c', dest='concurrency_count', action='store', default=50,
+                        type=int, help="The number of concurrent downloads to run at a time")
 
     args = parser.parse_args()
 
@@ -283,16 +326,21 @@ def main():
     handlers = [logging.FileHandler(args.log_file), logging.StreamHandler()]
 
     if args.verbose:
-        logging.basicConfig(format='[%(levelname)s:%(name)s] %(asctime)s - %(message)s', level=logging.DEBUG, handlers=handlers)
+        logging.basicConfig(
+            format='[%(levelname)s:%(name)s] %(asctime)s - %(message)s', level=logging.DEBUG, handlers=handlers)
     else:
-        logging.basicConfig(format='[%(levelname)s:%(name)s] %(asctime)s - %(message)s', level=logging.INFO, handlers=handlers)
+        logging.basicConfig(
+            format='[%(levelname)s:%(name)s] %(asctime)s - %(message)s', level=logging.INFO, handlers=handlers)
 
     logging.info("Starting...")
 
     if args.ctl_url:
-        loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, ctl_offset=int(args.ctl_offset), concurrency_count=args.concurrency_count))
+        loop.run_until_complete(retrieve_certificates(loop, url=args.ctl_url, ctl_offset=int(
+            args.ctl_offset), concurrency_count=args.concurrency_count))
     else:
-        loop.run_until_complete(retrieve_certificates(loop, concurrency_count=args.concurrency_count))
+        loop.run_until_complete(retrieve_certificates(
+            loop, concurrency_count=args.concurrency_count))
+
 
 if __name__ == "__main__":
     main()
