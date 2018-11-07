@@ -1,0 +1,23 @@
+app-type: cron-python
+jenkins-default-job: CLDSEC-axeman-collector-publish
+jenkins-jobs:
+- CLDSEC-axeman-collector-publish
+- CLDSEC-axeman-collector-promote
+jenkins-master: cldsec
+name: axeman-collector
+org: cldsec
+spinnaker-app: axemancollector
+tool-versions:
+  python: "3.7.0"
+
+command-configs:
+  build default:
+    build-steps:
+      - newt virtualenv {{.Python.Virtualenv}}
+      - newt pip install .
+
+commands:
+  - name: build
+    sub-commands:
+      - name: default
+        id: build-newt

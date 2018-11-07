@@ -1,35 +1,32 @@
+from . import certlib
+from OpenSSL import crypto
+from asn1crypto import x509
+import locale
+import logging
+import aioprocessing
+import aiohttp
+import hashlib
+import traceback
+import os
+import base64
+import math
+import sys
 import argparse
 import asyncio
 from collections import deque
-
+from OpenSSL.crypto import TYPE_RSA
 import uvloop
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-
-import sys
-import math
-import base64
-import os
-import traceback
-import hashlib
-import aiohttp
-import aioprocessing
-import logging
-import locale
 
 try:
     locale.setlocale(locale.LC_ALL, 'en_US')
 except:
     pass
 
-from OpenSSL import crypto
-
-from . import certlib
 
 DOWNLOAD_CONCURRENCY = 50
 MAX_QUEUE_SIZE = 1000
-import boto3
 
-client = boto3.client('s3')
 
 async def download_worker(session, log_info, work_deque, download_queue):
     while True:
@@ -190,10 +187,11 @@ def process_worker(result_info, output_dir="/tmp"):
 
         csv_file = "{}/{}-{}.csv".format(csv_storage,
                                          result_info['start'], result_info['end'])
-        key = f'{result_info['log_info']['url'].replace('/', '_')}-{result_info['start']}-{result_info['end']}'
+
         lines = []
 
         print("[{}] Parsing...".format(os.getpid()))
+
         for entry in result_info['entries']:
             mtl = certlib.MerkleTreeHeader.parse(
                 base64.b64decode(entry['leaf_input']))
@@ -204,6 +202,9 @@ def process_worker(result_info, output_dir="/tmp"):
                 cert_data['type'] = "X509LogEntry"
                 chain = [crypto.load_certificate(
                     crypto.FILETYPE_ASN1, certlib.Certificate.parse(mtl.Entry).CertData)]
+                public_key = chain[0].get_pubkey()
+                public_key = (crypto.dump_publickey(
+                    crypto.FILETYPE_PEM, public_key))
                 extra_data = certlib.CertificateChain.parse(
                     base64.b64decode(entry['extra_data']))
                 for cert in extra_data.Chain:
@@ -213,9 +214,12 @@ def process_worker(result_info, output_dir="/tmp"):
                 cert_data['type'] = "PreCertEntry"
                 extra_data = certlib.PreCertEntry.parse(
                     base64.b64decode(entry['extra_data']))
+
                 chain = [crypto.load_certificate(
                     crypto.FILETYPE_ASN1, extra_data.LeafCert.CertData)]
-
+                public_key = chain[0].get_pubkey()
+                public_key = (crypto.dump_publickey(
+                    crypto.FILETYPE_PEM, public_key))
                 for cert in extra_data.Chain:
                     chain.append(
                         crypto.load_certificate(
@@ -227,9 +231,9 @@ def process_worker(result_info, output_dir="/tmp"):
                 "chain": [certlib.dump_cert(x) for x in chain[1:]]
             })
 
-            cert_data['size'] = str(len(cert_data['leaf_cert']['as_der']))
-
             certlib.add_all_domains(cert_data)
+
+            cert_data['size'] = str(len(cert_data['leaf_cert']['as_der']))
 
             cert_data['source'] = {
                 "url": result_info['log_info']['url'],
@@ -237,24 +241,24 @@ def process_worker(result_info, output_dir="/tmp"):
 
             chain_hash = hashlib.sha256(
                 "".join([x['as_der'] for x in cert_data['chain']]).encode('ascii')).hexdigest()
-  
+
             # header = "url, cert_index, chain_hash, cert_der, all_domains, not_before, not_after"
             lines.append(
                 ",".join([
-                    result_info['log_info']['url'], # url
-                    str(entry['cert_index']),       # cert index
-                    chain_hash,                     # Chain Hash    
-                    cert_data['leaf_cert']['as_der'],
-                    cert_data['size'],
-                    ' '.join(cert_data['leaf_cert']['all_domains']), # all Domains
+                    result_info['log_info']['url'],   # URL
+                    str(entry['cert_index']),         # Cert_index
+                    chain_hash,                       # Chain Hash
+                    cert_data['size'],                # Size of cert in bytes
+                    cert_data['leaf_cert']['as_der'],  # As DER cert
+                    # comma delimited SAN certs
+                    '|'.join(cert_data['leaf_cert']['all_domains']),
+                    str(public_key),                       # Public Key
                     str(cert_data['leaf_cert']['not_before']),
                     str(cert_data['leaf_cert']['not_after'])
                 ]) + "\n"
             )
 
         print("[{}] Finished, writing CSV...".format(os.getpid()))
-
-        key = csv_file
 
         with open(csv_file, 'w') as f:
             f.write("".join(lines))

@@ -1,0 +1,11 @@
+build
+Dockerfile
+test_*.py
+.pylintrc
+tox.ini
+.tox
+.git
+.newt.yml
+__pycache__
+test-reports
+.newt-cache
